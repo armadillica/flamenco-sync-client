@@ -1,0 +1,1 @@
+# Flamenco Sync Client Changelog
