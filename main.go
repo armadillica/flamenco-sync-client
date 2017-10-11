@@ -8,6 +8,8 @@ import (
 
 	stdlog "log"
 
+	"github.com/armadillica/flamenco-sync-client/httpclient"
+	"github.com/armadillica/flamenco-sync-client/rsync"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -71,4 +73,13 @@ func main() {
 		ResponseHeaderTimeout: 30 * time.Second,
 	}
 
+	conn, err := httpclient.Dial("http://localhost:8084/")
+	if err != nil {
+		log.Fatal("dial:", err)
+	}
+
+	rsc := rsync.CreateRsyncClient(conn)
+	rsc.Work()
+
+	log.Info("Done")
 }
