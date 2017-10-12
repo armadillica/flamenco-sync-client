@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"sync"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -72,8 +73,22 @@ func (rsc *Client) startTCP() (int, error) {
 		if accepterr != nil {
 			log.WithError(accepterr).Fatal("unable to accept local connection")
 		}
-		go io.Copy(rsc.conn, rsyncConn)
-		go io.Copy(rsyncConn, rsc.conn)
+		wg := sync.WaitGroup{}
+		wg.Add(2)
+		go func() {
+			io.Copy(rsc.conn, rsyncConn)
+			log.Debug("tunnel: rsc.conn ← rsyncConn done")
+			wg.Done()
+		}()
+		go func() {
+			io.Copy(rsyncConn, rsc.conn)
+			log.Debug("tunnel: rsyncConn ← rsc.conn done")
+			wg.Done()
+		}()
+		wg.Wait()
+		log.Debug("tunnel: finished")
+
+		rsyncConn.Close()
 	}()
 
 	return port, nil
