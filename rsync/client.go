@@ -83,12 +83,13 @@ func (rsc *Client) startTCP() (int, error) {
 		go func() {
 			io.Copy(rsyncConn, rsc.conn)
 			log.Debug("tunnel: rsyncConn ← rsc.conn done")
+
+			// Close the TCP/IP connection to our local rsync when the HTTP connection dies.
+			rsyncConn.Close()
 			wg.Done()
 		}()
 		wg.Wait()
 		log.Debug("tunnel: finished")
-
-		rsyncConn.Close()
 	}()
 
 	return port, nil
