@@ -2,6 +2,7 @@ package httpclient
 
 import (
 	"bufio"
+	"crypto/tls"
 	"net"
 	"net/http"
 	"net/url"
@@ -14,7 +15,7 @@ import (
 var handshakeTimeout = 30 * time.Second
 
 // Dial performs a HTTP call and "upgrades" it to a regular socket
-func Dial(urlStr string) (net.Conn, error) {
+func Dial(urlStr string, insecureSkipVerify bool) (net.Conn, error) {
 	logger := log.WithField("url", urlStr)
 
 	req, err := http.NewRequest("RSYNC", urlStr, nil)
@@ -27,8 +28,7 @@ func Dial(urlStr string) (net.Conn, error) {
 
 	u := req.URL
 
-	// hostPort, hostNoPort := hostPortNoPort(u)
-	hostPort, _ := hostPortNoPort(u)
+	hostPort, hostNoPort := hostPortNoPort(u)
 
 	var deadline time.Time
 	deadline = time.Now().Add(handshakeTimeout)
@@ -40,22 +40,20 @@ func Dial(urlStr string) (net.Conn, error) {
 	}
 
 	if u.Scheme == "https" {
-		panic("https not supported for now")
-		// TODO(sybren): implement
-		// cfg := cloneTLSConfig(d.TLSClientConfig)
-		// if cfg.ServerName == "" {
-		// 	cfg.ServerName = hostNoPort
-		// }
-		// tlsConn := tls.Client(netConn, cfg)
-		// netConn = tlsConn
-		// if err := tlsConn.Handshake(); err != nil {
-		// 	return err
-		// }
-		// if !cfg.InsecureSkipVerify {
-		// 	if err := tlsConn.VerifyHostname(cfg.ServerName); err != nil {
-		// 		return err
-		// 	}
-		// }
+		cfg := &tls.Config{
+			ServerName:         hostNoPort,
+			InsecureSkipVerify: insecureSkipVerify,
+		}
+		tlsConn := tls.Client(netConn, cfg)
+		netConn = tlsConn // Replace netConn with the TLS connection so it gets tunneled.
+		if tlserr := tlsConn.Handshake(); tlserr != nil {
+			return nil, tlserr
+		}
+		if !cfg.InsecureSkipVerify {
+			if verifyerr := tlsConn.VerifyHostname(cfg.ServerName); verifyerr != nil {
+				return nil, verifyerr
+			}
+		}
 	}
 	if writeErr := req.Write(netConn); writeErr != nil {
 		logger.WithError(writeErr).Error("error writing request")

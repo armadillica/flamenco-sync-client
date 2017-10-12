@@ -1,73 +1,92 @@
 package rsync
 
 import (
-	"bytes"
+	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
-	"strings"
+	"strconv"
 
 	log "github.com/sirupsen/logrus"
 )
 
-// Manages a single client.
-type rsyncClient struct {
+// Client manages a single client connection to an rsync server.
+type Client struct {
 	conn net.Conn
 }
 
-func CreateRsyncClient(conn net.Conn) *rsyncClient {
-	daemon := rsyncClient{conn}
+// CreateRsyncClient sets up an rsync client for a specific network connection.
+func CreateRsyncClient(conn net.Conn) *Client {
+	daemon := Client{conn}
 	return &daemon
 }
 
-func (rsc *rsyncClient) Work() {
+// Work starts the rsync binary and lets it communicate with the server over the network.
+func (rsc *Client) Work() {
 	defer rsc.cleanup()
+	var err error
 
 	logger := log.WithFields(log.Fields{
 		"remote_addr": rsc.conn.RemoteAddr(),
 	})
 	logger.Debug("rsync daemon: starting")
 
-	tcpconn, ok := rsc.conn.(*net.TCPConn)
-	if !ok {
-		logger.Error("connection is not a TCP/IP connection")
-		return
-	}
-	connfile, err := tcpconn.File()
+	port, err := rsc.startTCP()
 	if err != nil {
-		logger.WithError(err).Error("unable to get file descriptor from TCP/IP connection")
-		return
+		logger.WithError(err).Fatal("unable to start local TCP tunnel server")
 	}
+	logger = logger.WithField("tunnel_port", port)
 
 	// Start the RSync process, connecting it to the network connection.
-	cmd := exec.Command("./rsync-bin", "/path-one", "&3::flamenco")
-	// logger.WithField("cmd", cmd).Debug("running")
+	cmd := exec.Command("rsync", "./LICENSE.txt", fmt.Sprintf("--port=%d", port), "localhost::", "--verbose")
+	cmd.Stdin = os.Stdin
+	cmd.Stderr = os.Stderr
 	cmd.Stdout = os.Stdout
-	cmd.ExtraFiles = []*os.File{connfile}
-	var stderrBuf bytes.Buffer
-	cmd.Stderr = &stderrBuf
-	cmd.Stderr = os.Stdout
-
-	if err := cmd.Run(); err != nil {
-		stderr := string(stderrBuf.Bytes())
-		trimmed := strings.TrimSpace(stderr)
-		logger.WithError(err).WithField("stderr", trimmed).Error("Error running rsync")
+	err = cmd.Run()
+	if err != nil {
+		logger.WithError(err).Error("Error running rsync")
 		return
 	}
 	logger.Info("rsync ran OK, closing connection")
-	// rsd.conn.Write([]byte("je moeder"))
 }
 
-func (rsd *rsyncClient) cleanup() {
+// Starts a local TCP/IP server that proxies between rsc.conn and whatever connects to it.
+func (rsc *Client) startTCP() (int, error) {
+	listener, err := net.Listen("tcp", "localhost:0") // port 0 means "choose automatically"
+	if err != nil {
+		return 0, fmt.Errorf("unable to open local port: %s", err)
+	}
+
+	_, portStr, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		return 0, fmt.Errorf("error getting port number from tunnel address: %s", err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return 0, fmt.Errorf("error converting port nr to integer: %s", err)
+	}
+
+	go func() {
+		rsyncConn, accepterr := listener.Accept()
+		if accepterr != nil {
+			log.WithError(accepterr).Fatal("unable to accept local connection")
+		}
+		go io.Copy(rsc.conn, rsyncConn)
+		go io.Copy(rsyncConn, rsc.conn)
+	}()
+
+	return port, nil
+}
+
+func (rsc *Client) cleanup() {
 	logger := log.WithFields(log.Fields{
-		"remote_addr": rsd.conn.RemoteAddr(),
+		"remote_addr": rsc.conn.RemoteAddr(),
 	})
 
-	if err := rsd.conn.Close(); err != nil {
+	if err := rsc.conn.Close(); err != nil {
 		logger.WithError(err).Warning("rsync client cleanup: unable to close connection")
 	} else {
 		logger.Debug("Connection closed")
 	}
-
-	// TODO: remove this daemon from the server list of daemons
 }
